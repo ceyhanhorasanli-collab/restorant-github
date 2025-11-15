@@ -2240,9 +2240,166 @@ class RestaurantSystemV7:
             traceback.print_exc()
 
     def edit_purchase_record(self, item_id, row):
-        # Geçici yer tutucu: gerçek düzenleme mantığı bulunana kadar
-        # fonksiyonun boş olması Python'un beklenen girinti hatasına
-        # sebep olmasını engellemek için `pass` eklenir.
-        pass
+        """Satın alma kaydını düzenle (basitleştirilmiş, main_window_clean_startup ile uyumlu)
+        Bu fonksiyon bir düzenleme penceresi açar, treeview ve Excel dosyasını günceller.
+        """
+        try:
+            # Edit dialog'u aç
+            edit_window = tk.Toplevel(self.root)
+            edit_window.title("Satın Alma Kaydını Düzenle")
+            edit_window.geometry("500x400")
+            edit_window.configure(bg="#fffbf0")
+            edit_window.transient(self.root)
+            edit_window.grab_set()
+
+            # Form frame
+            form_frame = tk.Frame(edit_window, bg="#fffbf0")
+            form_frame.pack(fill=tk.BOTH, expand=True, padx=20, pady=20)
+
+            # Başlık
+            tk.Label(form_frame, text="✏️ Satın Alma Kaydını Düzenle",
+                     font=("Arial", 16, "bold"), bg="#fffbf0", fg="#856404").pack(pady=(0, 20))
+
+            # Mevcut değerler
+            current_values = self.purchase_tree.item(item_id, 'values')
+
+            # Form alanları
+            fields = [
+                ("Tarih:", "date", current_values[0]),
+                ("Ürün Adı:", "product", current_values[1]),
+                ("Miktar:", "quantity", current_values[2]),
+                ("Birim:", "unit", current_values[3]),
+                ("Alış Fiyatı (TL):", "price", current_values[4].replace(" TL", "")),
+                ("Tedarikçi:", "supplier", current_values[7] if len(current_values) > 7 else "")
+            ]
+
+            form_vars = {}
+            for label, var_name, default_value in fields:
+                tk.Label(form_frame, text=label, font=("Arial", 11), bg="#fffbf0").pack(anchor="w")
+                var = tk.StringVar(value=default_value)
+                entry = tk.Entry(form_frame, textvariable=var, font=("Arial", 11), width=40)
+                entry.pack(fill=tk.X, pady=(0, 10))
+                form_vars[var_name] = var
+
+            # Butonlar
+            button_frame = tk.Frame(form_frame, bg="#fffbf0")
+            button_frame.pack(fill=tk.X, pady=20)
+
+            def save_changes():
+                try:
+                    # Güncellenmiş verileri al
+                    new_values = (
+                        form_vars["date"].get(),
+                        form_vars["product"].get(),
+                        form_vars["quantity"].get(),
+                        form_vars["unit"].get(),
+                        f"{float(parse_float(form_vars['price'].get())):.2f} TL" if form_vars["price"].get() else "0.00 TL",
+                        form_vars["supplier"].get() if "supplier" in form_vars else "",
+                        "📝"
+                    )
+
+                    # Treeview'da güncelle
+                    self.purchase_tree.item(item_id, values=new_values)
+
+                    # Excel'de güncelle: basit yaklaşım - var olan kaydı silip yenisini ekle
+                    try:
+                        if hasattr(self, 'urun_file_path') and os.path.exists(self.urun_file_path):
+                            # load existing
+                            df = pd.read_excel(self.urun_file_path, engine="openpyxl")
+                            df = normalize_urunler_cols(df)
+
+                            # Orijinal row parametresi bir pandas Series veya dict olabilir
+                            if row is not None:
+                                orig = row
+                                mask = (
+                                    (df['Ürün Adı'].astype(str).str.strip() == str(orig.get('Ürün Adı', '')).strip()) &
+                                    (df['Tarih'].astype(str).str[:10] == str(orig.get('Tarih', ''))[:10]) &
+                                    (df['Alış Fiyatı (TL)'] == float(orig.get('Alış Fiyatı (TL)', 0)))
+                                )
+                                if mask.any():
+                                    # Update matched rows
+                                    df.loc[mask, 'Tarih'] = form_vars["date"].get()
+                                    df.loc[mask, 'Ürün Adı'] = form_vars["product"].get()
+                                    df.loc[mask, 'Miktar'] = parse_float(form_vars["quantity"].get()) if form_vars["quantity"].get() else 0.0
+                                    df.loc[mask, 'Alış Fiyatı (TL)'] = parse_float(form_vars["price"].get()) if form_vars["price"].get() else 0.0
+                                    df.loc[mask, 'Birim'] = form_vars["unit"].get()
+                                    if 'supplier' in form_vars:
+                                        df.loc[mask, 'Tedarikçi'] = form_vars['supplier'].get()
+                                else:
+                                    # Eğer eşleşme yoksa append
+                                    new_row = {
+                                        'Tarih': form_vars["date"].get(),
+                                        'Ürün Adı': form_vars["product"].get(),
+                                        'Miktar': parse_float(form_vars["quantity"].get()) if form_vars["quantity"].get() else 0.0,
+                                        'Alış Fiyatı (TL)': parse_float(form_vars["price"].get()) if form_vars["price"].get() else 0.0,
+                                        'Birim': form_vars["unit"].get(),
+                                        'Tedarikçi': form_vars['supplier'].get() if 'supplier' in form_vars else ''
+                                    }
+                                    df = pd.concat([df, pd.DataFrame([new_row])], ignore_index=True)
+
+                            else:
+                                # row yoksa doğrudan ekle
+                                new_row = {
+                                    'Tarih': form_vars["date"].get(),
+                                    'Ürün Adı': form_vars["product"].get(),
+                                    'Miktar': parse_float(form_vars["quantity"].get()) if form_vars["quantity"].get() else 0.0,
+                                    'Alış Fiyatı (TL)': parse_float(form_vars["price"].get()) if form_vars["price"].get() else 0.0,
+                                    'Birim': form_vars["unit"].get(),
+                                    'Tedarikçi': form_vars['supplier'].get() if 'supplier' in form_vars else ''
+                                }
+                                df = pd.concat([df, pd.DataFrame([new_row])], ignore_index=True)
+
+                            # Kaydet
+                            df.to_excel(self.urun_file_path, index=False, engine="openpyxl")
+                    except Exception as e:
+                        print(f"[DEBUG] Excel güncelleme hatası (edit_purchase_record): {e}")
+
+                    edit_window.destroy()
+                    messagebox.showinfo("Başarılı", "Kayıt güncellendi!")
+
+                except Exception as e:
+                    messagebox.showerror("Hata", f"Güncellenirken hata oluştu: {e}")
+
+            def delete_record():
+                if messagebox.askyesno("Onay", "Bu kaydı silmek istediğinizden emin misiniz?"):
+                    try:
+                        # Excel'den sil (basit filtreleme)
+                        try:
+                            if hasattr(self, 'urun_file_path') and os.path.exists(self.urun_file_path):
+                                df = pd.read_excel(self.urun_file_path, engine="openpyxl")
+                                df = normalize_urunler_cols(df)
+                                if row is not None:
+                                    mask = (
+                                        (df['Ürün Adı'].astype(str).str.strip() == str(row.get('Ürün Adı', '')).strip()) &
+                                        (df['Tarih'].astype(str).str[:10] == str(row.get('Tarih', ''))[:10]) &
+                                        (df['Alış Fiyatı (TL)'] == float(row.get('Alış Fiyatı (TL)', 0)))
+                                    )
+                                    df = df[~mask]
+                                    df.to_excel(self.urun_file_path, index=False, engine="openpyxl")
+                        except Exception as e:
+                            print(f"[DEBUG] Excel silme hatası (edit_purchase_record): {e}")
+
+                        # Treeview'dan sil
+                        self.purchase_tree.delete(item_id)
+                        edit_window.destroy()
+                        self.refresh_purchase_list()
+                        messagebox.showinfo("Başarılı", "Kayıt silindi!")
+                    except Exception as e:
+                        messagebox.showerror("Hata", f"Silme sırasında hata oluştu: {e}")
+
+            tk.Button(button_frame, text="💾 Kaydet", command=save_changes,
+                     bg="#4CAF50", fg="white", font=("Arial", 11, "bold"),
+                     padx=20, pady=5).pack(side=tk.LEFT, padx=10)
+
+            tk.Button(button_frame, text="🗑️ Sil", command=delete_record,
+                     bg="#f44336", fg="white", font=("Arial", 11, "bold"),
+                     padx=20, pady=5).pack(side=tk.LEFT, padx=10)
+
+            tk.Button(button_frame, text="❌ İptal", command=edit_window.destroy,
+                     bg="#9E9E9E", fg="white", font=("Arial", 11),
+                     padx=20, pady=5).pack(side=tk.RIGHT, padx=10)
+
+        except Exception as e:
+            messagebox.showerror("Hata", f"Düzenleme penceresi açılamadı: {e}")
 
 # ... (Diğer metotlar olduğu gibi devam eder) ...
